@@ -1,65 +1,153 @@
-# Svelte library
+# svelte-hermes
 
-Everything you need to build a Svelte library, powered by [`sv`](https://npmjs.com/package/sv).
+Runtime i18n library for SvelteKit, built to support the [SvelteBuilder](https://github.com/cailenfisher/SvelteBuilder) ecosystem, but possibly useful for other projects.
 
-Read more about creating a library [in the docs](https://svelte.dev/docs/kit/packaging).
+## What it does
 
-## Creating a project
+svelte-hermes provides a reactive dictionary and a small set of components for rendering localized content that lives in a database or API — content that changes without a redeploy. It is intentionally not a build-time system like Paraglide. Every piece of content is addressed by a typed `slug + scope + entity ID` triple, which makes it possible to handle both static UI labels and per-entity content (e.g., a product description localized per product) through a single unified API.
 
-If you're seeing this, you've probably already done this step. Congrats!
+ICU message formatting (pluralization, variable interpolation, etc.) is provided by `intl-messageformat`.
 
-```sh
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+## Installation
 
 ```sh
-# recreate this project
-pnpm dlx sv@0.15.3 create --template library --types ts --add prettier eslint vitest="usages:unit,component" --install pnpm ./
+pnpm add svelte-hermes
 ```
 
-## Developing
+Requires Svelte 5.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Core concepts
 
-```sh
-npm run dev
+### `Dictionary`
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+The central reactive store. Load it with an array of `LocalText` records fetched from your backend, then read from it anywhere in your component tree.
+
+```ts
+import { Dictionary } from 'svelte-hermes';
+
+const dict = new Dictionary('en'); // pass your default language code
+dict.loadDictionary(await fetchTranslations());
 ```
 
-Everything inside `src/lib` is part of your library, everything inside `src/routes` can be used as a showcase or preview app.
+`loadDictionary` replaces the current entries. `mergeDictionary` adds new entries without clearing existing ones — useful for lazy-loading translations per route.
 
-## Building
+### Context helpers
 
-To build your library:
+Provide the dictionary once at the root of your app, consume it anywhere below.
 
-```sh
-npm pack
+```svelte
+<!-- +layout.svelte -->
+<script lang="ts">
+	import { Dictionary, setDictionary } from 'svelte-hermes';
+
+	const dict = new Dictionary('en');
+	setDictionary(dict);
+
+	$effect(() => {
+		fetch('/api/translations')
+			.then((r) => r.json())
+			.then((data) => dict.loadDictionary(data));
+	});
+</script>
+
+<slot />
 ```
 
-To create a production version of your showcase app:
-
-```sh
-npm run build
+```ts
+// anywhere in the tree
+import { getDictionary } from 'svelte-hermes';
+const dict = getDictionary();
 ```
 
-You can preview the production build with `npm run preview`.
+### `LocalText` component
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+Renders a localized string by slug. Falls back to a visible error if the slug is missing.
 
-## Publishing
+```svelte
+<script>
+	import { LocalTextComponent as LocalText } from 'svelte-hermes';
+</script>
 
-Go into the `package.json` and give your package the desired name through the `"name"` option. Also consider adding a `"license"` field and point it to a `LICENSE` file which you can create from a template (one popular option is the [MIT license](https://opensource.org/license/mit/)).
+<!-- Basic usage -->
+<LocalText slug="hero.headline" />
 
-To publish your library to [npm](https://www.npmjs.com):
+<!-- With ICU variable interpolation -->
+<LocalText slug="welcome.message" values={{ name: 'Ada' }} />
 
-```sh
-npm publish
+<!-- Scoped to an entity type + specific entity ID -->
+<LocalText slug="product.description" scope="product" contentId={42} />
 ```
+
+Renders a `<span>` with the `dir` attribute set from the locale, so RTL languages work without extra configuration.
+
+### `LocalDate` and `LocalTime` components
+
+Format dates and times using the active locale. Both render a `<time>` element with a proper `datetime` attribute.
+
+```svelte
+<script>
+	import { LocalDate, LocalTime } from 'svelte-hermes';
+</script>
+
+<LocalDate value={new Date()} />
+<LocalDate value="2026-01-15" style="long" />
+
+<LocalTime value={new Date()} />
+<LocalTime value={new Date()} style="medium" locale="fr" />
+```
+
+`style` accepts `'full' | 'long' | 'medium' | 'short'`. `locale` overrides the active dictionary locale when provided.
+
+### Utility functions
+
+```ts
+import { formatDate, formatTime, formatDateTime } from 'svelte-hermes';
+
+formatDate(new Date(), 'en', 'long');
+formatTime(new Date(), 'fr', 'short');
+formatDateTime(new Date(), 'de', 'medium', 'short');
+```
+
+## Data shape
+
+Your backend should return `LocalText[]`:
+
+```ts
+type LocalText = {
+	id: number;
+	scoped_content_id: number | null; // entity ID when scoped (e.g. product ID)
+	content: string; // ICU message string
+	locale: {
+		id: number;
+		code: string; // e.g. 'en', 'fr', 'ar'
+		name: string;
+		native_name: string;
+		dir: 'ltr' | 'rtl' | 'auto' | null;
+	};
+	link: {
+		id: number;
+		slug: string; // lookup key, e.g. 'hero.headline'
+		title: string;
+		scope: string | null; // e.g. 'product', null for global UI strings
+	};
+};
+```
+
+When multiple locales are present in the payload, `Dictionary` flattens the data down to one entry per slug/scope/entity triple, preferring the default language.
+
+## API reference
+
+| Export               | Type      | Description                               |
+| -------------------- | --------- | ----------------------------------------- |
+| `Dictionary`         | class     | Reactive store for localized content      |
+| `setDictionary`      | function  | Provide a `Dictionary` via Svelte context |
+| `getDictionary`      | function  | Consume the context `Dictionary`          |
+| `LocalTextComponent` | component | Render a localized string                 |
+| `LocalDate`          | component | Render a localized date                   |
+| `LocalTime`          | component | Render a localized time                   |
+| `formatDate`         | function  | Format a date to a string                 |
+| `formatTime`         | function  | Format a time to a string                 |
+| `formatDateTime`     | function  | Format a date + time to a string          |
+| `LocalText`          | type      | Shape of a single translation entry       |
+| `Locale`             | type      | Shape of a locale record                  |
+| `LocalTextLink`      | type      | Shape of a translation link/slug record   |
