@@ -1,7 +1,8 @@
 {
 	"name": "svelte-hermes",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"scripts": {
+		"postinstall": "node scripts/postinstall.js",
 		"dev": "vite dev",
 		"build": "vite build && npm run prepack",
 		"preview": "vite preview",
@@ -17,7 +18,9 @@
 	"files": [
 		"dist",
 		"!dist/**/*.test.*",
-		"!dist/**/*.spec.*"
+		"!dist/**/*.spec.*",
+		"scripts",
+		"static/schemas"
 	],
 	"sideEffects": [
 		"**/*.css"
